@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web App</title>
+</head>
+<body>
+    <h1>Welcome to Vision Aid</h1>
+    <button id="captureFrameButton">Capture Frame</button>
+    <div id="detectedObjects"></div>
+    <div id="results"></div>
+
+    <script>
+        document.getElementById('captureFrameButton').addEventListener('click', function() {
+            console.log("Capture Frame button clicked");
+            fetch('/capture-frame/', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Data received from server:", data);
+
+                const detectedObjectsDiv = document.getElementById('detectedObjects');
+                detectedObjectsDiv.innerHTML = '<h2>Detected Objects:</h2>';
+                data.detected_objects.forEach(object => {
+                    const objectDiv = document.createElement('div');
+                    objectDiv.innerText = object;
+                    detectedObjectsDiv.appendChild(objectDiv);
+                });
+
+                const resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = '<h2>Descriptions:</h2>';
+                data.descriptions.forEach(item => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.innerHTML = `<strong>${item.Name}</strong><p>${item.Description}</p><a href="${item["Detailed Description"]}">Detailed Description</a>`;
+                    resultsDiv.appendChild(itemDiv);
+                });
+
+                console.log("Starting to read descriptions");
+                speakDescriptions(data.descriptions);
+            })
+            .catch(error => console.error('Error:', error));
+        });
+
+        function speakDescriptions(descriptions) {
+            let currentDescriptionIndex = 0;
+
+            const detectedObjectsText = "Detected objects: " + descriptions.map(item => item.Name).join(', ');
+            const detectedObjectsUtterance = new SpeechSynthesisUtterance(detectedObjectsText);
+            console.log("Speaking detected objects:", detectedObjectsText);
+            speechSynthesis.speak(detectedObjectsUtterance);
+
+            detectedObjectsUtterance.onend = () => {
+                console.log("Finished speaking detected objects");
+                readPartialDescription(descriptions[currentDescriptionIndex]);
+            };
+
+            function readPartialDescription(description) {
+                const descriptionChunks = splitDescription(description.Description);
+                console.log("Reading partial description:", descriptionChunks);
+
+                let currentIndex = 0;
+                let timeoutId;
+
+                function readChunk() {
+                    if (currentIndex < descriptionChunks.length) {
+                        const chunk = descriptionChunks[currentIndex];
+                        const utterance = new SpeechSynthesisUtterance(chunk);
+                        console.log("Speaking description chunk:", chunk);
+
+                        utterance.onend = () => {
+                            console.log("Finished speaking description chunk");
+                            currentIndex++;
+                        };
+
+                        utterance.onerror = (e) => {
+                            console.error('Speech synthesis error:', e);
+                            currentIndex++;
+                        };
+
+                        speechSynthesis.speak(utterance);
+
+                        if (currentIndex === 0) {
+                            timeoutId = setTimeout(() => {
+                                askUserResponse(description, currentIndex, descriptionChunks);
+                            }, 10000);
+                        }
+                    }
+                }
+
+                readChunk();
+
+                speechSynthesis.onend = () => {
+                    clearTimeout(timeoutId);
+                };
+            }
+
+            function readFullDescription(description) {
+                const descriptionChunks = splitDescription(description.Description);
+                console.log("Reading full description:", descriptionChunks);
+
+                let currentIndex = 0;
+
+                function readChunk() {
+                    if (currentIndex < descriptionChunks.length) {
+                        const chunk = descriptionChunks[currentIndex];
+                        const utterance = new SpeechSynthesisUtterance(chunk);
+                        console.log("Speaking description chunk:", chunk);
+
+                        utterance.onend = () => {
+                            console.log("Finished speaking description chunk");
+                            currentIndex++;
+                            readChunk();
+                        };
+
+                        utterance.onerror = (e) => {
+                            console.error('Speech synthesis error:', e);
+                            currentIndex++;
+                            readChunk();
+                        };
+
+                        speechSynthesis.speak(utterance);
+                    } else {
+                        askUserResponseAfterFullDescription(description);
+                    }
+                }
+
+                readChunk();
+            }
+
+            function splitDescription(description) {
+                const sentences = description.match(/[^\.!\?]+[\.!\?]+/g) || [description];
+                const chunkSize = 200;
+                const chunks = [];
+                let currentChunk = '';
+
+                sentences.forEach(sentence => {
+                    if (currentChunk.length + sentence.length <= chunkSize) {
+                        currentChunk += sentence;
+                    } else {
+                        chunks.push(currentChunk);
+                        currentChunk = sentence;
+                    }
+                });
+
+                if (currentChunk) {
+                    chunks.push(currentChunk);
+                }
+
+                return chunks;
+            }
+
+            function askUserResponse(description, currentIndex, descriptionChunks) {
+                console.log("Asking user response");
+
+                const promptText = "Do you want to continue with this object, go to the next object, or quit?";
+                const promptUtterance = new SpeechSynthesisUtterance(promptText);
+                speechSynthesis.speak(promptUtterance);
+
+                promptUtterance.onend = () => {
+                    startVoiceRecognition(response => {
+                        console.log('User response:', response);
+                        if (response.includes('continue')) {
+                            readFullDescription(description);
+                        } else if (response.includes('next')) {
+                            currentDescriptionIndex++;
+                            while (currentDescriptionIndex < descriptions.length &&
+                                   descriptions[currentDescriptionIndex - 1].Name === descriptions[currentDescriptionIndex].Name) {
+                                currentDescriptionIndex++;
+                            }
+                            if (currentDescriptionIndex < descriptions.length) {
+                                readPartialDescription(descriptions[currentDescriptionIndex]);
+                            } else {
+                                console.log("All descriptions read");
+                                alert("All descriptions read.");
+                            }
+                        } else if (response.includes('quit')) {
+                            console.log("Exiting");
+                            alert("Exiting.");
+                        } else {
+                            console.log("Unrecognized response:", response);
+                            askUserResponse(description, currentIndex, descriptionChunks);
+                        }
+                    });
+                };
+            }
+
+            function askUserResponseAfterFullDescription(description) {
+                console.log("Asking user response");
+
+                const promptText = "Do you want to continue with this object, go to the next object, or quit?";
+                const promptUtterance = new SpeechSynthesisUtterance(promptText);
+                speechSynthesis.speak(promptUtterance);
+
+                promptUtterance.onend = () => {
+                    startVoiceRecognition(response => {
+                        console.log('User response:', response);
+                        if (response.includes('continue')) {
+                            // Read the same description again
+                            readFullDescription(description);
+                        } else if (response.includes('next')) {
+                            // Move to the next unique description
+                            currentDescriptionIndex++;
+                            while (currentDescriptionIndex < descriptions.length &&
+                                   descriptions[currentDescriptionIndex - 1].Name === descriptions[currentDescriptionIndex].Name) {
+                                currentDescriptionIndex++;
+                            }
+                            if (currentDescriptionIndex < descriptions.length) {
+                                readPartialDescription(descriptions[currentDescriptionIndex]);
+                            } else {
+                                console.log("All descriptions read");
+                                alert("All descriptions read.");
+                            }
+                        } else if (response.includes('quit')) {
+                            console.log("Exiting");
+                            alert("Exiting.");
+                        } else {
+                            console.log("Unrecognized response:", response);
+                            // Ask the user again for a valid response
+                            askUserResponseAfterFullDescription(description);
+                        }
+                    });
+                };
+            }
+        }
+
+        function startVoiceRecognition(callback) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            recognition.start();
+
+            recognition.onresult = function(event) {
+                const last = event.results.length - 1;
+                const command = event.results[last][0].transcript.toLowerCase().trim();
+                console.log('Voice input:', command);
+                callback(command);
+            };
+
+            recognition.onspeechend = function() {
+                recognition.stop();
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Voice recognition error:', event.error);
+                callback('');
+            };
+        }
+    </script>
+</body>
+</html>
+
+
+
+<!-- explained with comments  -->
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web App</title>
+</head>
+<body>
+    <h1>Welcome to Vision Aid</h1>
+    <button id="captureFrameButton">Capture Frame</button>
+    <div id="detectedObjects"></div>
+    <div id="results"></div>
+
+    <script>
+        document.getElementById('captureFrameButton').addEventListener('click', function() {
+            console.log("Capture Frame button clicked");
+
+            // Make a GET request to your Django backend
+            fetch('/capture-frame/', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Data received from server:", data);
+
+                const detectedObjectsDiv = document.getElementById('detectedObjects');
+                detectedObjectsDiv.innerHTML = '<h2>Detected Objects:</h2>';
+                data.detected_objects.forEach(object => {
+                    const objectDiv = document.createElement('div');
+                    objectDiv.innerText = object;
+                    detectedObjectsDiv.appendChild(objectDiv);
+                });
+
+                const resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = '<h2>Descriptions:</h2>';
+                data.descriptions.forEach(item => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.innerHTML = `<strong>${item.Name}</strong><p>${item.Description}</p><a href="${item["Detailed Description"]}">Detailed Description</a>`;
+                    resultsDiv.appendChild(itemDiv);
+                });
+
+                // Start reading descriptions after displaying the response
+                console.log("Starting to read descriptions");
+                speakDescriptions(data.descriptions);
+            })
+            .catch(error => console.error('Error:', error));
+        });
+
+        function speakDescriptions(descriptions) {
+            let currentDescriptionIndex = 0;
+
+            // Read detected objects
+            const detectedObjectsText = "Detected objects: " + descriptions.map(item => item.Name).join(', ');
+            const detectedObjectsUtterance = new SpeechSynthesisUtterance(detectedObjectsText);
+            console.log("Speaking detected objects:", detectedObjectsText);
+            speechSynthesis.speak(detectedObjectsUtterance);
+
+            // Start reading descriptions after all detected objects are read
+            detectedObjectsUtterance.onend = () => {
+                console.log("Finished speaking detected objects");
+                readPartialDescription(descriptions[currentDescriptionIndex]);
+            };
+
+            function readPartialDescription(description) {
+                const descriptionChunks = splitDescription(description.Description);
+                console.log("Reading partial description:", descriptionChunks);
+
+                let currentIndex = 0;
+                let timeoutId;
+
+                function readChunk() {
+                    if (currentIndex < descriptionChunks.length) {
+                        const chunk = descriptionChunks[currentIndex];
+                        const utterance = new SpeechSynthesisUtterance(chunk);
+                        console.log("Speaking description chunk:", chunk);
+
+                        utterance.onend = () => {
+                            console.log("Finished speaking description chunk");
+                            currentIndex++;
+                        };
+
+                        utterance.onerror = (e) => {
+                            console.error('Speech synthesis error:', e);
+                            currentIndex++;
+                        };
+
+                        speechSynthesis.speak(utterance);
+
+                        // Set timeout to ask user after 10 seconds
+                        if (currentIndex === 0) {
+                            timeoutId = setTimeout(() => {
+                                askUserResponse(description, currentIndex, descriptionChunks);
+                            }, 10000);
+                        }
+                    }
+                }
+
+                readChunk();
+
+                // Clear the timeout if the reading finishes within 10 seconds
+                speechSynthesis.onend = () => {
+                    clearTimeout(timeoutId);
+                };
+            }
+
+            function readFullDescription(description) {
+                const descriptionChunks = splitDescription(description.Description);
+                console.log("Reading full description:", descriptionChunks);
+
+                let currentIndex = 0;
+
+                function readChunk() {
+                    if (currentIndex < descriptionChunks.length) {
+                        const chunk = descriptionChunks[currentIndex];
+                        const utterance = new SpeechSynthesisUtterance(chunk);
+                        console.log("Speaking description chunk:", chunk);
+
+                        utterance.onend = () => {
+                            console.log("Finished speaking description chunk");
+                            currentIndex++;
+                            readChunk();
+                        };
+
+                        utterance.onerror = (e) => {
+                            console.error('Speech synthesis error:', e);
+                            currentIndex++;
+                            readChunk();
+                        };
+
+                        speechSynthesis.speak(utterance);
+                    } else {
+                        askUserResponseAfterFullDescription(description);
+                    }
+                }
+
+                readChunk();
+            }
+
+            function splitDescription(description) {
+                // Split the description into sentences
+                const sentences = description.match(/[^\.!\?]+[\.!\?]+/g) || [description];
+                const chunkSize = 200;
+                const chunks = [];
+                let currentChunk = '';
+
+                sentences.forEach(sentence => {
+                    if (currentChunk.length + sentence.length <= chunkSize) {
+                        currentChunk += sentence;
+                    } else {
+                        chunks.push(currentChunk);
+                        currentChunk = sentence;
+                    }
+                });
+
+                if (currentChunk) {
+                    chunks.push(currentChunk);
+                }
+
+                return chunks;
+            }
+
+            function askUserResponse(description, currentIndex, descriptionChunks) {
+                console.log("Asking user response");
+
+                const promptText = "Do you want to continue with this object, go to the next object, or quit?";
+                const promptUtterance = new SpeechSynthesisUtterance(promptText);
+                speechSynthesis.speak(promptUtterance);
+
+                promptUtterance.onend = () => {
+                    startVoiceRecognition(response => {
+                        console.log('User response:', response);
+                        if (response.includes('continue')) {
+                            // Read the full description
+                            readFullDescription(description);
+                        } else if (response.includes('next')) {
+                            // Move to the next unique description
+                            currentDescriptionIndex++;
+                            while (currentDescriptionIndex < descriptions.length &&
+                                   descriptions[currentDescriptionIndex - 1].Name === descriptions[currentDescriptionIndex].Name) {
+                                currentDescriptionIndex++;
+                            }
+                            if (currentDescriptionIndex < descriptions.length) {
+                                readPartialDescription(descriptions[currentDescriptionIndex]);
+                            } else {
+                                console.log("All descriptions read");
+                                alert("All descriptions read.");
+                            }
+                        } else if (response.includes('quit')) {
+                            console.log("Exiting");
+                            alert("Exiting.");
+                        } else {
+                            console.log("Unrecognized response:", response);
+                            // Ask the user again for a valid response
+                            askUserResponse(description, currentIndex, descriptionChunks);
+                        }
+                    });
+                };
+            }
+
+            function askUserResponseAfterFullDescription(description) {
+                console.log("Asking user response");
+
+                const promptText = "Do you want to continue with this object, go to the next object, or quit?";
+                const promptUtterance = new SpeechSynthesisUtterance(promptText);
+                speechSynthesis.speak(promptUtterance);
+
+                promptUtterance.onend = () => {
+                    startVoiceRecognition(response => {
+                        console.log('User response:', response);
+                        if (response.includes('continue')) {
+                            // Read the same description again
+                            readFullDescription(description);
+                        } else if (response.includes('next')) {
+                            // Move to the next unique description
+                            currentDescriptionIndex++;
+                            while (currentDescriptionIndex < descriptions.length &&
+                                   descriptions[currentDescriptionIndex - 1].Name === descriptions[currentDescriptionIndex].Name) {
+                                currentDescriptionIndex++;
+                            }
+                            if (currentDescriptionIndex < descriptions.length) {
+                                readPartialDescription(descriptions[currentDescriptionIndex]);
+                            } else {
+                                console.log("All descriptions read");
+                                alert("All descriptions read.");
+                            }
+                        } else if (response.includes('quit')) {
+                            console.log("Exiting");
+                            alert("Exiting.");
+                        } else {
+                            console.log("Unrecognized response:", response);
+                            // Ask the user again for a valid response
+                            askUserResponseAfterFullDescription(description);
+                        }
+                    });
+                };
+            }
+        }
+
+        function startVoiceRecognition(callback) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            recognition.start();
+
+            recognition.onresult = function(event) {
+                const last = event.results.length - 1;
+                const command = event.results[last][0].transcript.toLowerCase().trim();
+                console.log('Voice input:', command);
+                callback(command);
+            };
+
+            recognition.onspeechend = function() {
+                recognition.stop();
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Voice recognition error:', event.error);
+                callback('');
+            };
+        }
+    </script>
+</body>
+</html> -->
