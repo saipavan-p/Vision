@@ -1,0 +1,8 @@
+django
+opencv-python
+Pillow
+requests
+pyttsx3
+google-generativeai
+espeak
+langchain
